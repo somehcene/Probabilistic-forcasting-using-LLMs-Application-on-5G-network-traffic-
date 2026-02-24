@@ -31,6 +31,8 @@ class KTHParams:
     lambda_min: float = 1e-6
     psi_mean_min: float = 1e-9
     
+    session_mean_s: float = 30.0
+
 
 
 @dataclass(frozen=True)

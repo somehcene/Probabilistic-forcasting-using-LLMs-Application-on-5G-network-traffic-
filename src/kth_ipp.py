@@ -62,52 +62,101 @@ def solve_lambda_and_psi_mean(E_rate_mbps: float, p: KTHParams):
 
 def simulate_ipp_slot(slot_params: SlotParams, p: KTHParams, rng: np.random.Generator) -> np.ndarray:
     """
-    Event-driven CTMC IPP.
+    Event-driven CTMC IPP with session spreading.
 
-    ON duration ~ Exp(rate=zeta)
+    ON duration  ~ Exp(rate=zeta)
     OFF duration ~ Exp(rate=tau)
 
     During ON:
         arrivals ~ Poisson(lam * duration)
-        each arrival amount ~ Exp(psi_mean)
+        arrival times uniform on the ON interval
+        each arrival amount ~ Exp(psi_mean)   (Mbits)
+
+    Each arrival generates a session of duration D ~ Exp(mean=session_mean_s),
+    and its amount is spread uniformly over covered dt-bins.
 
     Output:
-        instantaneous rate in Mbps (amount/dt)
+        instantaneous rate in Mbps (Mbits/s) sampled every dt seconds.
     """
+    T = float(p.T)
+    dt = float(p.dt)
+    steps = int(round(T / dt))
 
-    steps = int(round(p.T / p.dt))
-    lam = slot_params.lam
-    psi_mean = slot_params.psi_mean
+    tau = float(p.tau)
+    zeta = float(p.zeta)
+    lam = float(slot_params.lam)
+    psi_mean = float(slot_params.psi_mean)
 
+    # --- 1) Simulate CTMC ON/OFF and generate arrival times ---
+    t = 0.0
+    state_on = False  # start OFF (choice doesn't matter much)
+    arr_times_list = []
+
+    while t < T:
+        if state_on:
+            # ON duration
+            if zeta > 0:
+                dur = rng.exponential(scale=1.0 / zeta)
+            else:
+                dur = T - t  # never turns off
+        else:
+            # OFF duration
+            if tau > 0:
+                dur = rng.exponential(scale=1.0 / tau)
+            else:
+                dur = T - t  # never turns on
+
+        t_next = min(T, t + dur)
+
+        if state_on:
+            on_len = t_next - t
+            if on_len > 0 and lam > 0:
+                n = rng.poisson(lam * on_len)
+                if n > 0:
+                    # uniform arrival times over [t, t_next)
+                    arr_times = t + rng.random(n) * on_len
+                    arr_times_list.append(arr_times)
+
+        # flip state, move time
+        state_on = not state_on
+        t = t_next
+
+    if len(arr_times_list) == 0:
+        return np.zeros(steps, dtype=float)
+
+    arr_times = np.concatenate(arr_times_list)
+    n = arr_times.size
+
+    # --- 2) Draw amounts (Mbits) ---
+    # Note: psi_mean might be tiny/huge depending on parameters; keep it >= small eps
+    psi_mean_eff = max(psi_mean, 1e-12)
+    amounts = rng.exponential(scale=psi_mean_eff, size=n)
+
+    # --- 3) Spread each arrival over a session duration ---
     bin_amount = np.zeros(steps, dtype=float)
 
-    on = rng.random() < stationary_p_on(p.tau, p.zeta)
+    start_idx = np.minimum((arr_times / dt).astype(int), steps - 1)
 
-    t = 0.0
-    while t < p.T:
-        if on:
-            dur = rng.exponential(1.0 / p.zeta)
-            t_end = min(t + dur, p.T)
-            seg_len = t_end - t
+    # NEW param: p.session_mean_s must exist in KTHParams
+    sess_mean = float(getattr(p, "session_mean_s", 30.0))
+    sess_mean = max(sess_mean, dt)  # avoid < dt weirdness
 
-            n = rng.poisson(lam * seg_len)
+    D = rng.exponential(scale=sess_mean, size=n)  # seconds
+    end_times = np.minimum(arr_times + D, T)
+    end_idx = np.minimum((end_times / dt).astype(int), steps - 1)
 
-            if n > 0:
-                arr_times = t + rng.random(n) * seg_len
-                idx = np.minimum((arr_times / p.dt).astype(int), steps - 1)
+    for j in range(n):
+        i0 = int(start_idx[j])
+        i1 = int(end_idx[j])
+        if i1 < i0:
+            i1 = i0
+        L = (i1 - i0 + 1)
+        bin_amount[i0:i1+1] += amounts[j] / L
 
-                amounts = rng.exponential(scale=psi_mean, size=n)
-                bin_amount += np.bincount(idx, weights=amounts, minlength=steps)
+    # --- 4) Convert Mbits per bin -> Mbps (Mbits/s) ---
+    slot_rate = bin_amount / dt
+    return slot_rate
 
-            t = t_end
-            on = False
-        else:
-            dur = rng.exponential(1.0 / p.tau)
-            t = min(t + dur, p.T)
-            on = True
-
-    # Convert amount per bin → Mbps
-    return bin_amount / p.dt
 
 
 # ============================================================
@@ -134,6 +183,20 @@ def generate_fine_series_from_coarse(
         sp = solve_lambda_and_psi_mean(coarse_mbps[t], p)
 
         slot_rate = simulate_ipp_slot(sp, p, rng)
+
+        target = coarse_mbps[t]   # the original 5-min value (Mbps)
+        m = float(slot_rate.mean())
+
+        if target <= 0:
+            slot_rate[:] = 0.0
+        else:
+            if m <= 0:
+                # Rare edge case: simulation produced all zeros but target > 0
+                # Fallback: constant fill (still preserves exact mean)
+                slot_rate[:] = target
+            else:
+                slot_rate *= (target / m)  # <-- exact conservation step
+
 
         fine[t*steps:(t+1)*steps] = slot_rate
         recon[t] = slot_rate.mean()

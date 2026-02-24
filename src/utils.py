@@ -34,7 +34,8 @@ def coarsen_fine_to_slots(fine: np.ndarray, steps_per_slot: int) -> np.ndarray:
     fine = np.asarray(fine, dtype=float)
     if fine.size % steps_per_slot != 0:
         raise ValueError("fine length must be multiple of steps_per_slot.")
-    return fine.reshape(-1, steps_per_slot).sum(axis=1)
+    return fine.reshape(-1, steps_per_slot).mean(axis=1)
+
 
 
 def summary_errors(a: np.ndarray, b: np.ndarray) -> dict:
