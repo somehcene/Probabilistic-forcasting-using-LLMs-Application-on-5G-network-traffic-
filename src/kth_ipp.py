@@ -22,36 +22,64 @@ def stationary_p_on(tau: float, zeta: float) -> float:
 # STABLE MOMENT MATCHING (MEAN ONLY)
 # ============================================================
 
-def solve_lambda_and_psi_mean(E_rate_mbps: float, p: KTHParams):
+def solve_lambda_and_psi_mean(E_rate: float, E_var: float, p: KTHParams):
     """
-    Stable solver:
-
-    - Fix λ globally (controls burstiness)
-    - Solve ψ_mean from first moment constraint only
-
-    We preserve:
-        E[ coarse rate ] exactly.
-
-    No second-moment estimation (not supported by dataset structure).
+    Exact Second-Moment matching from KTH Framework.
+    
+    Equations:
+    1) E[X] = P_on * lam * T * psi_mean
+    2) Var[X] = (P_on * lam * T) * (2 * psi_mean^2) + Var_ON_OFF * (lam * T * psi_mean)^2
+    
+    where Var_ON_OFF is the variance of the total time spent in the ON state
+    over duration T.
+    
+    To conform to continuous time, we match the rate moments per T-slot.
+    For simplicity, let r = E_rate (Mbps) and v = E_var (Mbps^2).
+    
+    Then:
+        r = P_on * lam * psi_mean
+        v = (P_on * lam * 2 * psi_mean^2) / T + [2*zeta / (tau * T * (tau+zeta))] * r^2
+        
+    We solve for lam and psi_mean.
     """
-
-    if E_rate_mbps <= 0:
+    if E_rate <= 0:
         return SlotParams(lam=p.lambda_min, psi_mean=p.psi_mean_min)
 
-    tau, zeta, T = p.tau, p.zeta, p.T
-
-    # ---- FIX λ (burstiness control parameter) ----
-    lam = p.lambda_fixed  # arrivals/sec during ON
-
-    # Expected number of arrivals in slot
+    tau = float(p.tau)
+    zeta = float(p.zeta)
+    T = float(p.T)
+    
     P_on = stationary_p_on(tau, zeta)
-    E_U = P_on * lam * T
-
-    # We want:
-    # coarse_rate = (E_U * psi_mean) / T
-    # => psi_mean = coarse_rate * T / E_U
-
-    psi_mean = (E_rate_mbps * T) / E_U
+    
+    # KTH feasibility condition and CTMC variance correction
+    var_ctmc = (2.0 * zeta) / (tau * T * (tau + zeta))
+    
+    # Local Variance targeted after subtracting CTMC base variance
+    V_diff = E_var - var_ctmc * (E_rate ** 2)
+    
+    # If the empirical variance is somehow too small for the CTMC,
+    # bound it to a minimum epsilon to avoid negative values
+    if V_diff <= 0:
+        V_diff = 1e-6
+        
+    # Solve the system:
+    # r = P_on * lam * psi_mean => P_on * lam = r / psi_mean
+    # V_diff = (P_on * lam * 2 * psi_mean^2) / T
+    # => V_diff = (r / psi_mean * 2 * psi_mean^2) / T = (2 * r * psi_mean) / T
+    # => psi_mean = (V_diff * T) / (2 * r)
+    
+    psi_mean = (V_diff * T) / (2.0 * E_rate)
+    psi_mean = max(psi_mean, p.psi_mean_min)
+    
+    lam = E_rate / (P_on * psi_mean)
+    
+    # Enforce a reasonable minimum arrival rate to prevent massive sparse spikes
+    min_lam = getattr(p, 'lambda_fixed', 0.5)
+    if lam < min_lam:
+        lam = min_lam
+        # CRITICAL: Re-adjust psi_mean so the expected mean rate is strictly preserved!
+        # Otherwise, bumping lambda arbitrarily inflates the generated traffic volume.
+        psi_mean = E_rate / (P_on * lam)
 
     return SlotParams(lam=float(lam), psi_mean=float(psi_mean))
 
@@ -128,20 +156,19 @@ def simulate_ipp_slot(slot_params: SlotParams, p: KTHParams, rng: np.random.Gene
     n = arr_times.size
 
     # --- 2) Draw amounts (Mbits) ---
-    # Note: psi_mean might be tiny/huge depending on parameters; keep it >= small eps
     psi_mean_eff = max(psi_mean, 1e-12)
     amounts = rng.exponential(scale=psi_mean_eff, size=n)
-
-    # --- 3) Spread each arrival over a session duration ---
+    # We use a constant duration instead of a random exponential one. 
+    # An independent exponential duration can be arbitrarily small, which 
+    # when coupled with a large data amount causes infinite (Pareto) spikes.
     bin_amount = np.zeros(steps, dtype=float)
 
     start_idx = np.minimum((arr_times / dt).astype(int), steps - 1)
 
-    # NEW param: p.session_mean_s must exist in KTHParams
     sess_mean = float(getattr(p, "session_mean_s", 30.0))
     sess_mean = max(sess_mean, dt)  # avoid < dt weirdness
 
-    D = rng.exponential(scale=sess_mean, size=n)  # seconds
+    D = np.full(n, sess_mean)  # Constant duration for all sessions
     end_times = np.minimum(arr_times + D, T)
     end_idx = np.minimum((end_times / dt).astype(int), steps - 1)
 
@@ -150,8 +177,17 @@ def simulate_ipp_slot(slot_params: SlotParams, p: KTHParams, rng: np.random.Gene
         i1 = int(end_idx[j])
         if i1 < i0:
             i1 = i0
-        L = (i1 - i0 + 1)
-        bin_amount[i0:i1+1] += amounts[j] / L
+        
+        # To avoid scaling up when approaching the slot boundary (T),
+        # we calculate the flat bit rate of this session as if it completed.
+        # This will correctly "spill" out of bounds (effectively losing some data)
+        # without artificially spiking the rate in the last bins.
+        session_rate_mbits_per_s = amounts[j] / D[j]
+        amount_per_bin = session_rate_mbits_per_s * dt
+        
+        # If the session is truncated at the end, it just contributes its
+        # nominal rate to the remaining bins, and the rest is naturally lost.
+        bin_amount[i0:i1+1] += amount_per_bin
 
     # --- 4) Convert Mbits per bin -> Mbps (Mbits/s) ---
     slot_rate = bin_amount / dt
@@ -165,13 +201,14 @@ def simulate_ipp_slot(slot_params: SlotParams, p: KTHParams, rng: np.random.Gene
 
 def generate_fine_series_from_coarse(
     coarse_mbps: np.ndarray,
-    coarse_var_unused: np.ndarray,   # kept for API compatibility
+    coarse_var: np.ndarray,   # Now actually used for second moment matching
     p: KTHParams,
     seed: int = 42
 ):
     rng = np.random.default_rng(seed)
 
     coarse_mbps = np.asarray(coarse_mbps, dtype=float)
+    coarse_var = np.asarray(coarse_var, dtype=float)
 
     steps = int(round(p.T / p.dt))
     N = coarse_mbps.size
@@ -180,7 +217,7 @@ def generate_fine_series_from_coarse(
     recon = np.zeros(N)
 
     for t in range(N):
-        sp = solve_lambda_and_psi_mean(coarse_mbps[t], p)
+        sp = solve_lambda_and_psi_mean(coarse_mbps[t], coarse_var[t], p)
 
         slot_rate = simulate_ipp_slot(sp, p, rng)
 
