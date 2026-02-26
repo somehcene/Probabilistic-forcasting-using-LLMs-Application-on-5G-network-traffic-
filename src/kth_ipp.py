@@ -73,12 +73,16 @@ def solve_lambda_and_psi_mean(E_rate: float, E_var: float, p: KTHParams):
     
     lam = E_rate / (P_on * psi_mean)
     
-    # Enforce a reasonable minimum arrival rate to prevent massive sparse spikes
+    # Enforce a reasonable minimum and MAXIMUM arrival rate to prevent massive sparse spikes or hanging
     min_lam = getattr(p, 'lambda_fixed', 0.5)
+    max_lam = 50.0  # Cap lambda to avoid memory explosion and slow Python for-loops
+    
     if lam < min_lam:
         lam = min_lam
         # CRITICAL: Re-adjust psi_mean so the expected mean rate is strictly preserved!
-        # Otherwise, bumping lambda arbitrarily inflates the generated traffic volume.
+        psi_mean = E_rate / (P_on * lam)
+    elif lam > max_lam:
+        lam = max_lam
         psi_mean = E_rate / (P_on * lam)
 
     return SlotParams(lam=float(lam), psi_mean=float(psi_mean))

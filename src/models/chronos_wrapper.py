@@ -1,15 +1,16 @@
 import torch
 from chronos import ChronosPipeline
 
-def get_chronos_forecast(context, pred_length=12, model_id="amazon/chronos-t5-small", device_map="cpu"):
+def get_chronos_forecast(context, pred_length=12, model_id="amazon/chronos-t5-small", device_map="cpu", pipeline=None):
     """
     context: numpy array or torch tensor of shape (batch, seq_len)
     """
-    pipeline = ChronosPipeline.from_pretrained(
-        model_id,
-        device_map=device_map,
-        torch_dtype=torch.float32,
-    )
+    if pipeline is None:
+        pipeline = ChronosPipeline.from_pretrained(
+            model_id,
+            device_map=device_map,
+            torch_dtype=torch.float32,
+        )
 
     if not isinstance(context, torch.Tensor):
         context = torch.tensor(context, dtype=torch.float32)
