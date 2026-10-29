@@ -1,3 +1,8 @@
+# Run from anywhere: make the repo root the working dir and importable
+import os, sys
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+os.chdir(ROOT); sys.path.insert(0, ROOT)
+
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
@@ -46,7 +51,7 @@ def test_ipp_parameters(df_agg, tau, zeta, title_suffix=""):
     plt.grid(True, alpha=0.3)
     
     # Save instead of forcing interactive block
-    filename = f"ipp_tune_tau{tau:.3f}_zeta{zeta:.3f}.png"
+    filename = f"results/figures/ipp_tune_tau{tau:.3f}_zeta{zeta:.3f}.png"
     plt.savefig(filename, bbox_inches='tight')
     print(f"Saved plot to {filename}")
     plt.close()

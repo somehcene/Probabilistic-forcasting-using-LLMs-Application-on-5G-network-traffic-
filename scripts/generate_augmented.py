@@ -1,3 +1,8 @@
+# Run from anywhere: make the repo root the working dir and importable
+import os, sys
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+os.chdir(ROOT); sys.path.insert(0, ROOT)
+
 import pandas as pd
 import numpy as np
 import os
@@ -41,7 +46,7 @@ def generate_augmented_data(filepath="data/histo_trafic.csv", output_path="data/
         
         fine_macro, _, _ = generate_fine_series_from_coarse(
             coarse_agg,
-            coarse_var=rolling_variance_proxy(coarse_agg, k=6, var_floor_ratio=0.01, tau=p_macro.tau, zeta=p_macro.zeta, T=p_macro.T),
+            coarse_var=rolling_variance_proxy(coarse_agg, k=6, var_floor_ratio=0.01, tau=p_macro.tau, zeta=p_macro.zeta, T=p_macro.T) * p_macro.variance_scale,
             p=p_macro,
             seed=42
         )

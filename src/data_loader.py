@@ -31,15 +31,16 @@ def get_synthesized_data(df_agg, dt=60.0):
     coarse_agg = df_agg["trafic_mbps"].to_numpy()
     p_macro = KTHParams(
         T=300.0,
-        tau=1/15,
-        zeta=1/15,
+        tau=0.067,
+        zeta=0.067,
+        variance_scale=0.5,
         lambda_fixed=0.5, 
         dt=dt
     )
     
     fine_macro, report_macro, recon_macro = generate_fine_series_from_coarse(
         coarse_agg,
-        coarse_var=rolling_variance_proxy(coarse_agg, k=6, var_floor_ratio=0.01, tau=p_macro.tau, zeta=p_macro.zeta, T=p_macro.T),
+        coarse_var=rolling_variance_proxy(coarse_agg, k=6, var_floor_ratio=0.01, tau=p_macro.tau, zeta=p_macro.zeta, T=p_macro.T) * p_macro.variance_scale,
         p=p_macro,
         seed=42
     )

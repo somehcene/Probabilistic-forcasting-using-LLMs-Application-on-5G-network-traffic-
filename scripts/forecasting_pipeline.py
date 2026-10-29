@@ -10,6 +10,11 @@
 # In[ ]:
 
 
+# Run from anywhere: make the repo root the working dir and importable
+import os, sys
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+os.chdir(ROOT); sys.path.insert(0, ROOT)
+
 import torch
 import matplotlib.pyplot as plt
 import numpy as np

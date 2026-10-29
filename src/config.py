@@ -21,12 +21,15 @@ class KTHParams:
     dt: float = 5.0
 
     # ON/OFF CTMC parameters
-    tau: float = 0.5      # OFF -> ON rate (was 1/30)
-    zeta: float = 0.5     # ON -> OFF rate (was 1/10)
+    tau: float = 0.067    # OFF -> ON rate
+    zeta: float = 0.067   # ON -> OFF rate
 
     # Fixed arrival rate during ON
     lambda_fixed: float = 0.5
 
+    # Variance down-scaling multiplier
+    variance_scale: float = 0.5
+    
     # safety floors
     lambda_min: float = 1e-6
     psi_mean_min: float = 1e-9

@@ -1,0 +1,11 @@
+numpy
+pandas
+matplotlib
+scipy
+scikit-learn
+statsmodels
+pmdarima
+torch
+tqdm
+chronos-forecasting>=2.0
+jupyter
